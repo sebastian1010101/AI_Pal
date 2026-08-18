@@ -1,0 +1,23 @@
+# --- Framework ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# --- Configuración / entorno ---
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+
+# --- Base de datos (ADR-002: PostgreSQL + pgvector, un solo motor) ---
+sqlalchemy==2.0.35
+asyncpg==0.29.0
+pgvector==0.3.4
+alembic==1.13.3
+
+# --- LLM (ADR-010: OpenAI, ver LLM_MODEL) ---
+openai==1.51.2
+
+# --- Audio: STT/TTS se llaman como HTTP APIs externas, httpx alcanza ---
+httpx==0.27.2
+
+# --- Uploads de audio en /conversation/message ---
+python-multipart==0.0.12

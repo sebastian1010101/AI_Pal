@@ -1,0 +1,41 @@
+# --- Entorno / secretos ---
+.env
+.env.local
+*.env
+
+# --- Python (apps/api) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node / Next.js (apps/web) ---
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Docker ---
+*.pid
+
+# --- Base de datos local ---
+*.sqlite3
+
+# --- Editor / SO ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Assets 3D pesados generados localmente (no versionar binarios grandes sin Git LFS) ---
+*.fbx
+*.blend1

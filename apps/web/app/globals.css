@@ -1,0 +1,270 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #25222a;
+  background: #f4f1f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.page-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.chat {
+  width: min(100%, 760px);
+  height: min(760px, calc(100vh - 48px));
+  min-height: 520px;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #ded8e4;
+  border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(49, 39, 61, 0.1);
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  border-bottom: 1px solid #ebe6ef;
+}
+
+.eyebrow {
+  margin: 0 0 2px;
+  color: #766c7d;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.65rem;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #786e7f;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.status::before {
+  width: 8px;
+  height: 8px;
+  content: "";
+  border-radius: 50%;
+  background: #aaa1af;
+}
+
+.status-ready::before {
+  background: #48a078;
+}
+
+.messages {
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.empty-state {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: #786e7f;
+}
+
+.empty-state h2 {
+  margin: 0 0 8px;
+  color: #3a343e;
+  font-size: 1.15rem;
+}
+
+.empty-state p {
+  max-width: 340px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.message {
+  width: fit-content;
+  max-width: min(82%, 560px);
+  margin-bottom: 16px;
+}
+
+.message span {
+  display: block;
+  margin: 0 8px 5px;
+  color: #776d7e;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.message p {
+  margin: 0;
+  padding: 12px 15px;
+  border-radius: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.message-user {
+  margin-left: auto;
+}
+
+.message-user span {
+  text-align: right;
+}
+
+.message-user p {
+  color: #ffffff;
+  background: #715884;
+  border-bottom-right-radius: 4px;
+}
+
+.message-assistant p {
+  background: #f0ebf3;
+  border-bottom-left-radius: 4px;
+}
+
+.pending {
+  opacity: 0.7;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 24px 16px;
+  padding: 11px 13px;
+  color: #7c2634;
+  background: #fff0f2;
+  border: 1px solid #f0c7cd;
+  border-radius: 10px;
+  font-size: 0.88rem;
+}
+
+.error button {
+  padding: 6px 10px;
+  color: #7c2634;
+  background: #ffffff;
+  border: 1px solid #d99ea8;
+  border-radius: 7px;
+}
+
+.composer {
+  padding: 18px 24px 22px;
+  border-top: 1px solid #ebe6ef;
+}
+
+.composer label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.composer-row {
+  display: flex;
+  gap: 10px;
+}
+
+.composer input {
+  min-width: 0;
+  flex: 1;
+  padding: 12px 14px;
+  color: #25222a;
+  background: #faf8fb;
+  border: 1px solid #d8d0de;
+  border-radius: 10px;
+  outline: none;
+}
+
+.composer input:focus {
+  border-color: #806492;
+  box-shadow: 0 0 0 3px rgba(128, 100, 146, 0.14);
+}
+
+.composer input:disabled {
+  color: #918995;
+  background: #f2eff4;
+}
+
+.composer button {
+  padding: 0 18px;
+  color: #ffffff;
+  background: #715884;
+  border: 0;
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+.composer button:hover:not(:disabled) {
+  background: #604873;
+}
+
+.composer button:disabled {
+  background: #b9adbf;
+}
+
+@media (max-width: 600px) {
+  .page-shell {
+    padding: 0;
+  }
+
+  .chat {
+    width: 100%;
+    height: 100vh;
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .chat-header,
+  .messages,
+  .composer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .error {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+
+  .message {
+    max-width: 90%;
+  }
+}
