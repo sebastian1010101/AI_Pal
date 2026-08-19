@@ -15,7 +15,8 @@ body {
 }
 
 button,
-input {
+input,
+output {
   font: inherit;
 }
 
@@ -161,6 +162,42 @@ h1 {
   opacity: 0.7;
 }
 
+.voice-response {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 24px;
+  border-top: 1px solid #ebe6ef;
+}
+
+.voice-response audio {
+  width: min(100%, 360px);
+  height: 36px;
+}
+
+.voice-notice {
+  margin: 0;
+  color: #7c2634;
+  font-size: 0.88rem;
+}
+
+.voice-response output {
+  color: #5f5367;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.latency-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.latency-breakdown strong {
+  color: #3f3048;
+}
+
 .error {
   display: flex;
   align-items: center;
@@ -239,6 +276,27 @@ h1 {
   background: #b9adbf;
 }
 
+.composer .record-button {
+  min-width: 88px;
+  color: #604873;
+  background: #f0ebf3;
+  border: 1px solid #cabed1;
+}
+
+.composer .record-button:hover:not(:disabled) {
+  background: #e6ddea;
+}
+
+.composer .record-button-active {
+  color: #ffffff;
+  background: #9b4050;
+  border-color: #9b4050;
+}
+
+.composer .record-button-active:hover:not(:disabled) {
+  background: #853544;
+}
+
 @media (max-width: 600px) {
   .page-shell {
     padding: 0;
@@ -259,9 +317,28 @@ h1 {
     padding-right: 16px;
   }
 
+  .voice-response {
+    align-items: stretch;
+    flex-direction: column;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .voice-response audio {
+    width: 100%;
+  }
+
   .error {
     margin-left: 16px;
     margin-right: 16px;
+  }
+
+  .composer-row {
+    flex-wrap: wrap;
+  }
+
+  .composer input {
+    flex-basis: 100%;
   }
 
   .message {

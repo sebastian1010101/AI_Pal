@@ -160,6 +160,48 @@
 
 ---
 
+## ADR-012 — Identidad local persistente separada de la conversación
+
+**Estado:** Aceptada
+
+**Contexto:** Step5 decidió solicitar un `session_id` nuevo al backend en cada carga y mantenerlo solo en el estado del cliente. Esa simplificación permitió cerrar el flujo inicial, pero hizo inaccesibles los hechos guardados después de recargar o volver otro día, por lo que no se podía validar la memoria persistente exigida por M1.
+
+**Decisión:** El frontend genera un UUID anónimo la primera vez, lo guarda en `localStorage` y lo reutiliza como `identity_id` en cargas posteriores. Cada carga genera además un `conversation_id` nuevo y efímero. La memoria de largo plazo se asocia a `identity_id`; el contexto corto se delimita por `identity_id` y `conversation_id`. El frontend deja de solicitar `POST /session` al cargar. Esta decisión revisa la simplificación local de Step5; no introduce autenticación ni un sistema multiusuario.
+
+**Motivo:** Separar identidad y conversación permite recuperar recuerdos entre días sin mezclar el historial reciente de conversaciones distintas. Un UUID local tiene el menor alcance suficiente para validar M1 antes de implementar autenticación.
+
+**Trade-off aceptado:** La identidad depende del navegador y del almacenamiento local: se pierde al borrar los datos, no se comparte entre dispositivos y quien copie el UUID podría acceder a la misma memoria porque todavía no existe autenticación. Es aceptable para un único usuario de prueba local, no para una demo pública multiusuario.
+
+---
+
+## ADR-013 — Contexto corto limitado a los últimos ocho mensajes
+
+**Estado:** Aceptada
+
+**Contexto:** ADR-005 evita usar el historial crudo como memoria de largo plazo, pero enviar únicamente hechos semánticos hacía que el modelo pudiera perder el turno inmediatamente anterior. La memoria factual persistente y la coherencia local de una conversación cumplen funciones distintas.
+
+**Decisión:** Guardar los mensajes de usuario y asistente por `conversation_id` e incluir en cada llamada los últimos ocho mensajes anteriores —cuatro intercambios completos—, en orden cronológico, además del mensaje actual y de los hechos recuperados por pgvector. El límite es fijo; los mensajes más antiguos se excluyen del prompt, aunque permanezcan almacenados. Una carga nueva crea otra conversación y no arrastra este historial crudo.
+
+**Motivo:** Ocho mensajes ofrecen contexto suficiente para referencias recientes y correcciones sin permitir que el prompt crezca sin límite. Mantener este contexto separado de los hechos preserva ADR-005: el historial reciente sostiene el hilo; los hechos resumidos sostienen la continuidad entre conversaciones.
+
+**Trade-off aceptado:** Una referencia a más de cuatro intercambios puede salir de la ventana si no fue extraída como hecho, y almacenar mensajes crudos aumenta el volumen y la sensibilidad de los datos. Un límite fijo por cantidad de mensajes tampoco controla tokens con precisión; si aparecen mensajes extensos deberá evolucionar a un presupuesto de tokens.
+
+---
+
+## ADR-014 — Deepgram y ElevenLabs para el pipeline de voz
+
+**Estado:** Aceptada
+
+**Contexto:** Step7 necesita convertir grabaciones completas del navegador a texto y sintetizar cada respuesta sin exponer credenciales en el frontend. `PROJECT.md` ya limitaba las opciones de STT a servicios externos como Deepgram o Whisper API y las de TTS a servicios como ElevenLabs o Inworld, priorizando latencia sobre calidad máxima.
+
+**Decisión:** Usar Deepgram Nova-3 para STT pregrabado en español y ElevenLabs Flash v2.5 para TTS en MP3, con la voz preset Jessica. El navegador captura WebM/Opus mediante `MediaRecorder`, lo envía como base64 al endpoint existente y reproduce el MP3 base64 de la respuesta. Todas las llamadas a proveedores permanecen en FastAPI. Si ElevenLabs falla, el backend conserva estado HTTP 200 y la respuesta textual, devuelve `audio_base64: null` y un `audio_error` no fatal para que la interfaz degrade a solo texto.
+
+**Motivo:** Nova-3 acepta directamente el formato generado por el navegador y evita transcodificación local. Flash v2.5 está optimizado para baja latencia y soporta español. Una voz preset respeta el no-goal de no implementar clonación de voz en el MVP.
+
+**Trade-off aceptado:** El flujo no usa streaming: el backend espera la grabación completa, la respuesta completa del LLM y el MP3 completo antes de reproducir. Base64 agrega tamaño a request y response, pero conserva el contrato simple de Step7. En la prueba real de navegador del 2026-08-18, aun usando ElevenLabs Flash v2.5, transcurrieron 4,61 segundos desde presionar `Detener` hasta el evento `playing`; supera el objetivo de referencia de 2,5 segundos. Se acepta esta latencia para cerrar el pipeline secuencial de M2 y se deja como optimización explícita evaluar streaming de TTS o del pipeline antes de la demo final, sin cambiar identidad ni memoria.
+
+---
+
 ## Plantilla para nuevas decisiones
 
 ```

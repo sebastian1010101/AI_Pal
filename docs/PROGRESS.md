@@ -115,3 +115,41 @@ Formato de cada entrada:
 - El alcance técnico de M1 queda completo. El criterio de salida de M1 requiere uso real durante al menos dos semanas y se evaluará en Step6 antes de decidir si avanzar a M2; Step6 no se inició.
 
 **Referencias:** Step5, PROJECT.md M1, ARCHITECTURE.md regla de oro
+
+## Step 6 — Checkpoint de validación — 2026-08-18
+
+**Implementado:**
+- Se registró una comprobación de uso real posterior a Step5.5: al volver a la aplicación y recargar la página, Nara conservó entre conversaciones información personal como el nombre o la edad mediante la identidad persistente.
+- En esa comprobación, las respuestas se percibieron creativas y simpáticas, sin el tono robótico observado en las pruebas exploratorias anteriores.
+- El dueño del proyecto decidió avanzar a M2 asumiendo explícitamente el riesgo de invertir en voz sin completar la validación prevista.
+
+**Desvíos del plan del step:**
+- Step6 se cierra por una decisión explícita de producto basada en un solo día de señal positiva, no en las dos semanas de uso real exigidas por `Step6.md` y por el criterio de salida de M1.
+- La evidencia disponible todavía es insuficiente para considerar confirmada de forma robusta la hipótesis de `PROJECT.md` sección 2; este cierre autoriza avanzar a M2, pero no debe citarse como validación completa de la continuidad generada por la memoria persistente.
+
+**Pendiente / deuda dejada para después:**
+- Continúa pendiente acumular uso real durante al menos dos semanas y reevaluar la hipótesis con más evidencia, incluyendo posibles fallos, recuerdos irrelevantes y nuevas vueltas espontáneas.
+
+**Referencias:** Step6, PROJECT.md §2 y M1, `docs/notas-validacion.md`
+
+## Step 7 — Voz: STT + TTS (M2) — 2026-08-18
+
+**Implementado:**
+- Se integró Deepgram Nova-3 para transcribir grabaciones completas en español y ElevenLabs Flash v2.5 con la voz preset Jessica para sintetizar respuestas en MP3; las credenciales permanecen exclusivamente en FastAPI.
+- El navegador captura WebM/Opus mediante `MediaRecorder`, permite iniciar y detener la grabación, envía el audio como base64 al contrato existente y muestra la transcripción devuelta por el backend.
+- La respuesta de Nara conserva texto y audio reproducible. El frontend mide con `performance.now()` desde que se presiona `Detener` hasta el evento `playing` del audio y muestra el resultado en la interfaz.
+- El flujo de voz reutiliza sin cambios el `identity_id` persistente de `localStorage` y el `conversation_id` de la carga actual. En la prueba real, Deepgram transcribió `Hola, agente.` y Nara respondió por voz llamando al usuario `Sebas`, conservando la continuidad existente.
+- La prueba real de navegador midió **4,61 s** de latencia extremo a extremo. El pipeline funciona, pero no cumple el objetivo de referencia de menos de 2,5 s.
+- Se verificaron proveedor STT y TTS por separado, endpoint completo, rechazo de formatos inválidos, sintaxis Python, typecheck y build de producción del frontend.
+- El backend devuelve tiempos instrumentados de STT, memoria, LLM, TTS y total; el frontend los muestra junto con la diferencia atribuible a preparación, red y comienzo de reproducción.
+- El 2026-08-19 se forzó un fallo real de ElevenLabs con una clave inválida aislada, sin modificar `.env`: el proveedor respondió 401, pero `/conversation/message` conservó HTTP 200 y devolvió `text: "Fallback confirmado."`, `audio_base64: null` y el aviso no fatal `La voz no está disponible temporalmente; la respuesta se muestra en texto.` La interfaz acepta ese contrato, muestra el texto y el aviso y no intenta reproducir audio.
+
+**Desvíos del plan del step:**
+- La primera prueba de micrófono quedaba indefinidamente en `Pensando y preparando la voz…`: la limpieza de React Strict Mode mantenía una marca de desmontaje y descartaba el audio antes del request. Se corrigió reiniciando esa marca en cada montaje y se repitió exitosamente la prueba real.
+- Se mantuvo el flujo secuencial sin streaming previsto por Step7. Incluso con el modelo TTS de baja latencia Flash v2.5, la medición de 4,61 s superó el objetivo de 2,5 s; el trade-off quedó documentado en ADR-014.
+
+**Pendiente / deuda dejada para después:**
+- Evaluar streaming de TTS o del pipeline para reducir el tiempo hasta el primer audio antes de la demo final. La medición actual corresponde a una prueba real, no a un benchmark estadístico con múltiples muestras.
+- Los visemas permanecen vacíos y no se implementó avatar ni lip-sync; corresponden exclusivamente a Step8 y no se iniciaron.
+
+**Referencias:** ADR-014 (fallback de TTS y trade-off de latencia), ADR-013 (contexto corto, no fallback), Step7, PROJECT.md M2

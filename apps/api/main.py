@@ -4,18 +4,20 @@ Backend principal — orquesta STT, memoria (pgvector), LLM y TTS.
 Contratos de API definidos en docs/ARCHITECTURE.md sección 5.
 Decisiones de stack justificadas en docs/DECISIONS.md (ADR-001 a ADR-007).
 
-Estado actual: esqueleto funcional para M1 (chat con memoria, solo texto).
-Los pasos de STT/TTS están como placeholders — se activan en M2 (ver PROJECT.md, roadmap).
+Estado actual: pipeline conversacional con memoria, Deepgram STT y ElevenLabs TTS.
+La voz se implementa en M2 sin avatar (ver ADR-014).
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import json
 import logging
+import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -27,7 +29,7 @@ from pydantic_settings import BaseSettings
 from sqlalchemy import delete, select
 
 from database import create_database
-from models import MemoryFactRecord
+from models import ConversationMessageRecord, MemoryFactRecord
 from prompts.memory_extraction_prompt import MEMORY_EXTRACTION_PROMPT
 from prompts.system_prompt import SYSTEM_PROMPT
 
@@ -44,7 +46,10 @@ class Settings(BaseSettings):
     voyage_embedding_model: str = "voyage-4-lite"
     voyage_embedding_dimension: int = 512
     stt_api_key: str = ""
+    stt_model: str = "nova-3"
     tts_api_key: str = ""
+    tts_model: str = "eleven_flash_v2_5"
+    tts_voice_id: str = "cgSgspJ2msm6clMCkdW9"
 
     class Config:
         env_file = ".env"
@@ -82,14 +87,26 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class MessageRequest(BaseModel):
-    session_id: uuid.UUID
+    identity_id: uuid.UUID
+    conversation_id: uuid.UUID
     text: Optional[str] = None
-    audio_base64: Optional[str] = None
+    audio_base64: Optional[str] = Field(default=None, max_length=14_000_000)
+
+
+class PipelineTimings(BaseModel):
+    stt_ms: float
+    memory_ms: float
+    llm_ms: float
+    tts_ms: float
+    backend_total_ms: float
 
 
 class MessageResponse(BaseModel):
     text: str
+    transcript: str
     audio_base64: Optional[str] = None
+    audio_error: Optional[str] = None
+    timings: PipelineTimings
     visemes: list[dict] = Field(default_factory=list)
 
 
@@ -128,11 +145,52 @@ async def health() -> dict:
 # ---------------------------------------------------------------------------
 
 async def transcribe_audio(audio_base64: str) -> str:
-    """
-    TODO (M2): llamar a la API de STT configurada (STT_API_KEY).
-    Placeholder: no se implementa hasta M2 (ver PROJECT.md, roadmap).
-    """
-    raise NotImplementedError("STT se implementa en M2 — por ahora usar 'text' en el request.")
+    if not settings.stt_api_key:
+        raise RuntimeError("STT_API_KEY no está configurada.")
+
+    content_type = "audio/webm"
+    encoded_audio = audio_base64
+    if audio_base64.startswith("data:"):
+        header, separator, encoded_audio = audio_base64.partition(",")
+        if not separator or ";base64" not in header:
+            raise ValueError("El audio debe usar una URL de datos en base64.")
+        content_type = header.removeprefix("data:").split(";", 1)[0]
+
+    if content_type.split(";", 1)[0] not in {"audio/webm", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav"}:
+        raise ValueError("El formato de audio no está soportado.")
+
+    try:
+        audio = base64.b64decode(encoded_audio, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("El audio enviado no es base64 válido.") from exc
+    if not audio:
+        raise ValueError("El audio enviado está vacío.")
+    if len(audio) > 10 * 1024 * 1024:
+        raise ValueError("El audio supera el límite de 10 MB.")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            "https://api.deepgram.com/v1/listen",
+            params={
+                "model": settings.stt_model,
+                "language": "es",
+                "smart_format": "true",
+            },
+            headers={
+                "Authorization": f"Token {settings.stt_api_key}",
+                "Content-Type": content_type,
+            },
+            content=audio,
+        )
+    response.raise_for_status()
+    try:
+        alternatives = response.json()["results"]["channels"][0]["alternatives"]
+        transcript = alternatives[0]["transcript"].strip() if alternatives else ""
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("Deepgram devolvió una respuesta inesperada.") from exc
+    if not transcript:
+        raise ValueError("No se detectó voz en la grabación.")
+    return transcript
 
 
 def memory_fact_from_record(record: MemoryFactRecord) -> MemoryFact:
@@ -181,7 +239,7 @@ async def generate_embedding(text: str, input_type: str) -> list[float]:
 
 
 async def search_relevant_memory(
-    session_id: uuid.UUID,
+    identity_id: uuid.UUID,
     query_text: str,
     limit: int = 5,
 ) -> list[MemoryFact]:
@@ -189,7 +247,7 @@ async def search_relevant_memory(
         return []
     async with SessionLocal() as database:
         has_memory = await database.scalar(
-            select(MemoryFactRecord.id).where(MemoryFactRecord.session_id == session_id).limit(1)
+            select(MemoryFactRecord.id).where(MemoryFactRecord.identity_id == identity_id).limit(1)
         )
     if has_memory is None:
         return []
@@ -198,7 +256,7 @@ async def search_relevant_memory(
     distance = MemoryFactRecord.embedding.cosine_distance(query_embedding)
     statement = (
         select(MemoryFactRecord)
-        .where(MemoryFactRecord.session_id == session_id)
+        .where(MemoryFactRecord.identity_id == identity_id)
         .order_by(distance)
         .limit(limit)
     )
@@ -207,7 +265,58 @@ async def search_relevant_memory(
     return [memory_fact_from_record(record) for record in records]
 
 
-async def call_llm(system_prompt: str, memory_facts: list[MemoryFact], user_message: str) -> str:
+async def load_recent_messages(
+    identity_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    limit: int = 8,
+) -> list[dict[str, str]]:
+    statement = (
+        select(ConversationMessageRecord)
+        .where(
+            ConversationMessageRecord.identity_id == identity_id,
+            ConversationMessageRecord.conversation_id == conversation_id,
+        )
+        .order_by(ConversationMessageRecord.created_at.desc(), ConversationMessageRecord.id.desc())
+        .limit(limit)
+    )
+    async with SessionLocal() as database:
+        records = list((await database.scalars(statement)).all())
+    return [{"role": record.role, "content": record.content} for record in reversed(records)]
+
+
+async def save_conversation_turn(
+    identity_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    turn_time = datetime.now(timezone.utc)
+    async with SessionLocal() as database:
+        database.add_all([
+            ConversationMessageRecord(
+                identity_id=identity_id,
+                conversation_id=conversation_id,
+                role="user",
+                content=user_message,
+                created_at=turn_time,
+            ),
+            ConversationMessageRecord(
+                identity_id=identity_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                content=assistant_message,
+                created_at=turn_time + timedelta(microseconds=1),
+            ),
+        ])
+        await database.commit()
+
+
+async def call_llm(
+    system_prompt: str,
+    memory_facts: list[MemoryFact],
+    recent_messages: list[dict[str, str]],
+    user_message: str,
+) -> str:
     if not settings.llm_api_key:
         raise RuntimeError("LLM_API_KEY no está configurada.")
 
@@ -225,6 +334,7 @@ async def call_llm(system_prompt: str, memory_facts: list[MemoryFact], user_mess
             model=settings.llm_model or "gpt-4o-mini",
             messages=[
                 {"role": "system", "content": final_system_prompt},
+                *recent_messages,
                 {"role": "user", "content": user_message},
             ],
         )
@@ -257,7 +367,7 @@ async def extract_facts(user_message: str) -> list[ExtractedFact]:
 
 
 async def extract_and_save_facts(
-    session_id: uuid.UUID,
+    identity_id: uuid.UUID,
     user_message: str,
     llm_response: str,
 ) -> None:
@@ -269,7 +379,7 @@ async def extract_and_save_facts(
         async with SessionLocal() as database:
             database.add_all(
                 MemoryFactRecord(
-                    session_id=session_id,
+                    identity_id=identity_id,
                     text=fact.text,
                     embedding=embedding,
                     topic=fact.topic,
@@ -279,43 +389,95 @@ async def extract_and_save_facts(
             )
             await database.commit()
     except Exception:
-        logger.exception("No se pudieron extraer y guardar hechos para la sesión %s", session_id)
+        logger.exception("No se pudieron extraer y guardar hechos para la identidad %s", identity_id)
 
 
-async def synthesize_speech(text: str) -> Optional[str]:
-    """
-    TODO (M2): llamar a la API de TTS configurada (TTS_API_KEY) y devolver
-    el audio en base64. Placeholder: devuelve None hasta M2.
-    """
-    return None
+async def synthesize_speech(text: str) -> str:
+    if not settings.tts_api_key:
+        raise RuntimeError("TTS_API_KEY no está configurada.")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{settings.tts_voice_id}",
+            params={"output_format": "mp3_44100_128"},
+            headers={
+                "xi-api-key": settings.tts_api_key,
+                "Accept": "audio/mpeg",
+                "Content-Type": "application/json",
+            },
+            json={
+                "text": text,
+                "model_id": settings.tts_model,
+            },
+        )
+    response.raise_for_status()
+    if not response.content:
+        raise ValueError("ElevenLabs devolvió audio vacío.")
+    return base64.b64encode(response.content).decode("ascii")
 
 
 @app.post("/conversation/message", response_model=MessageResponse)
 async def post_message(payload: MessageRequest, background_tasks: BackgroundTasks) -> MessageResponse:
+    request_started = time.perf_counter()
     if not payload.text and not payload.audio_base64:
         raise HTTPException(status_code=400, detail="Enviar 'text' o 'audio_base64'.")
 
+    stt_ms = 0.0
     user_text = payload.text
     if not user_text and payload.audio_base64:
+        stage_started = time.perf_counter()
         try:
             user_text = await transcribe_audio(payload.audio_base64)
-        except NotImplementedError as exc:
-            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (RuntimeError, httpx.HTTPError) as exc:
+            logger.exception("Deepgram no pudo transcribir el audio.")
+            raise HTTPException(status_code=502, detail="No se pudo transcribir el audio.") from exc
+        stt_ms = (time.perf_counter() - stage_started) * 1000
 
-    relevant_facts = await search_relevant_memory(payload.session_id, user_text)
+    stage_started = time.perf_counter()
+    relevant_facts = await search_relevant_memory(payload.identity_id, user_text)
+    recent_messages = await load_recent_messages(payload.identity_id, payload.conversation_id)
+    memory_ms = (time.perf_counter() - stage_started) * 1000
 
+    stage_started = time.perf_counter()
     try:
-        llm_response = await call_llm(SYSTEM_PROMPT, relevant_facts, user_text)
+        llm_response = await call_llm(SYSTEM_PROMPT, relevant_facts, recent_messages, user_text)
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    llm_ms = (time.perf_counter() - stage_started) * 1000
+
+    await save_conversation_turn(payload.identity_id, payload.conversation_id, user_text, llm_response)
 
     # No bloquea la respuesta (ver ARCHITECTURE.md) — en producción esto
     # se dispara como background task (fastapi.BackgroundTasks) o cola async.
-    background_tasks.add_task(extract_and_save_facts, payload.session_id, user_text, llm_response)
+    background_tasks.add_task(extract_and_save_facts, payload.identity_id, user_text, llm_response)
 
-    audio = await synthesize_speech(llm_response)
+    audio = None
+    audio_error = None
+    stage_started = time.perf_counter()
+    try:
+        audio = await synthesize_speech(llm_response)
+    except (RuntimeError, ValueError, httpx.HTTPError):
+        logger.warning("ElevenLabs no pudo sintetizar la respuesta; se devuelve solo texto.", exc_info=True)
+        audio_error = "La voz no está disponible temporalmente; la respuesta se muestra en texto."
+    tts_ms = (time.perf_counter() - stage_started) * 1000
 
-    return MessageResponse(text=llm_response, audio_base64=audio, visemes=[])
+    timings = PipelineTimings(
+        stt_ms=round(stt_ms, 1),
+        memory_ms=round(memory_ms, 1),
+        llm_ms=round(llm_ms, 1),
+        tts_ms=round(tts_ms, 1),
+        backend_total_ms=round((time.perf_counter() - request_started) * 1000, 1),
+    )
+    return MessageResponse(
+        text=llm_response,
+        transcript=user_text,
+        audio_base64=audio,
+        audio_error=audio_error,
+        timings=timings,
+        visemes=[],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -324,10 +486,10 @@ async def post_message(payload: MessageRequest, background_tasks: BackgroundTask
 # ---------------------------------------------------------------------------
 
 @app.get("/memory/facts", response_model=MemoryFactsResponse)
-async def get_memory_facts(session_id: uuid.UUID) -> MemoryFactsResponse:
+async def get_memory_facts(identity_id: uuid.UUID) -> MemoryFactsResponse:
     statement = (
         select(MemoryFactRecord)
-        .where(MemoryFactRecord.session_id == session_id)
+        .where(MemoryFactRecord.identity_id == identity_id)
         .order_by(MemoryFactRecord.created_at.desc())
     )
     async with SessionLocal() as database:
@@ -336,19 +498,10 @@ async def get_memory_facts(session_id: uuid.UUID) -> MemoryFactsResponse:
 
 
 @app.delete("/memory/facts")
-async def delete_memory_facts(session_id: uuid.UUID) -> dict:
+async def delete_memory_facts(identity_id: uuid.UUID) -> dict:
     async with SessionLocal() as database:
         result = await database.execute(
-            delete(MemoryFactRecord).where(MemoryFactRecord.session_id == session_id)
+            delete(MemoryFactRecord).where(MemoryFactRecord.identity_id == identity_id)
         )
         await database.commit()
-    return {"session_id": str(session_id), "deleted_count": result.rowcount}
-
-
-# ---------------------------------------------------------------------------
-# Sesión — helper simple para pruebas locales mientras no hay auth real.
-# ---------------------------------------------------------------------------
-
-@app.post("/session")
-async def create_session() -> dict:
-    return {"session_id": str(uuid.uuid4())}
+    return {"identity_id": str(identity_id), "deleted_count": result.rowcount}
